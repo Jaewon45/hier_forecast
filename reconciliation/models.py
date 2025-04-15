@@ -3,6 +3,8 @@ from typing import Dict, List, Tuple, Optional, Union
 from sklearn.linear_model import LinearRegression
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from statsmodels.tsa.arima.model import ARIMA
+import pandas as pd
+from prophet import Prophet
 
 class ForecastingModels:
     def __init__(self):
@@ -137,7 +139,7 @@ class ForecastingModels:
             n_periods: Number of steps to forecast
             validation_period: Number of periods to use for validation
             model: Optional model to use. Can be:
-                  - String name ('LinearRegression', 'ExponentialSmoothing', or 'ARIMA')
+                  - String name ('LinearRegression', 'ExponentialSmoothing', 'ARIMA', or 'Prophet')
                   - Model instance (any class name containing these model names)
                   - None (will select best model based on validation)
             
@@ -172,8 +174,10 @@ class ForecastingModels:
                         model_name = 'ExponentialSmoothing'
                     elif 'ARIMA' in class_name:
                         model_name = 'ARIMA'
+                    elif 'Prophet' in class_name:
+                        model_name = 'Prophet'
                     else:
-                        raise ValueError(f"Unknown model: {class_name}. Must contain one of: 'LinearRegression', 'ExponentialSmoothing', 'ARIMA'")
+                        raise ValueError(f"Unknown model: {class_name}. Must contain one of: 'LinearRegression', 'ExponentialSmoothing', 'ARIMA', 'Prophet'")
                 
                 if model_name == 'LinearRegression':
                     self.train_linear_regression(X_train, y_train)
@@ -185,8 +189,19 @@ class ForecastingModels:
                 elif model_name == 'ARIMA':
                     self.train_arima(series_data)
                     best_forecasts[series_name] = self.forecast_arima(n_periods)
+                elif model_name == 'Prophet':
+                    # Convert numpy array to pandas DataFrame for Prophet
+                    df = pd.DataFrame({
+                        'ds': pd.date_range(start='2020-01-01', periods=len(series_data), freq='M'),
+                        'y': series_data
+                    })
+                    prophet_model = Prophet()
+                    prophet_model.fit(df)
+                    future = prophet_model.make_future_dataframe(periods=n_periods, freq='M')
+                    forecast = prophet_model.predict(future)
+                    best_forecasts[series_name] = forecast['yhat'].values[-n_periods:]
                 else:
-                    raise ValueError(f"Unknown model: {model_name}. Must be one of: 'LinearRegression', 'ExponentialSmoothing', 'ARIMA'")
+                    raise ValueError(f"Unknown model: {model_name}. Must be one of: 'LinearRegression', 'ExponentialSmoothing', 'ARIMA', 'Prophet'")
             else:
                 # Train and validate each model
                 model_performance = {}
@@ -206,6 +221,17 @@ class ForecastingModels:
                 arima_forecast = self.forecast_arima(validation_period)
                 model_performance['ARIMA'] = np.mean(np.abs(arima_forecast - val_data))
                 
+                # Prophet
+                df = pd.DataFrame({
+                    'ds': pd.date_range(start='2020-01-01', periods=len(train_data), freq='M'),
+                    'y': train_data
+                })
+                prophet_model = Prophet()
+                prophet_model.fit(df)
+                future = prophet_model.make_future_dataframe(periods=validation_period, freq='M')
+                prophet_forecast = prophet_model.predict(future)
+                model_performance['Prophet'] = np.mean(np.abs(prophet_forecast['yhat'].values[-validation_period:] - val_data))
+                
                 # Select best model based on validation MAE
                 best_model = min(model_performance.items(), key=lambda x: x[1])[0]
                 
@@ -216,9 +242,19 @@ class ForecastingModels:
                 elif best_model == 'ExponentialSmoothing':
                     self.train_exponential_smoothing(series_data)  # Retrain on full data
                     best_forecasts[series_name] = self.forecast_exponential_smoothing(n_periods)
-                else:  # ARIMA
+                elif best_model == 'ARIMA':
                     self.train_arima(series_data)  # Retrain on full data
                     best_forecasts[series_name] = self.forecast_arima(n_periods)
+                elif best_model == 'Prophet':
+                    df = pd.DataFrame({
+                        'ds': pd.date_range(start='2020-01-01', periods=len(series_data), freq='M'),
+                        'y': series_data
+                    })
+                    prophet_model = Prophet()
+                    prophet_model.fit(df)
+                    future = prophet_model.make_future_dataframe(periods=n_periods, freq='M')
+                    forecast = prophet_model.predict(future)
+                    best_forecasts[series_name] = forecast['yhat'].values[-n_periods:]
                 
                 print(f"Selected {best_model} for {series_name} (MAE: {model_performance[best_model]:.2f})")
             

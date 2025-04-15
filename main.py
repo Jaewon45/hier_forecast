@@ -14,12 +14,16 @@ from darts.models import (
     Prophet,
     AutoARIMA
 )
+import os
 
 def main():
     # Configuration
     DATA_PATH = 'data/SampleHierForecastingBASF_share.xlsx'
     OUTPUT_DIR = 'output'
     FORECAST_HORIZONS = [1, 3, 6, 12]
+    
+    # Define reconciliation methods to test (only Bottom-Up and Top-Down)
+    RECONCILIATION_METHODS = ['bottom_up', 'top_down']
     
     # Initialize data loader
     print("Loading and preprocessing data...")
@@ -44,10 +48,10 @@ def main():
     # Initialize forecasting models
     print("\nInitializing forecasting models...")
     models = [
-        LinearRegressionModel(lags=12),
-        ExponentialSmoothing(),
-        Prophet(),
-        AutoARIMA()
+        ('LinearRegression', LinearRegressionModel(lags=12)),
+        ('ExponentialSmoothing', ExponentialSmoothing()),
+        ('Prophet', Prophet()),
+        ('AutoARIMA', AutoARIMA())
     ]
     
     # Initialize forecaster
@@ -58,9 +62,8 @@ def main():
     
     # Train and evaluate each model
     print("\nTraining and evaluating models...")
-    for model in models:
-        model_name = str(model).split('(')[0]
-        print(f"\nTraining {model_name}...")
+    for model_name, model in models:
+        print(f"\nProcessing {model_name}...")
         
         # Generate base forecasts
         base_forecasts = forecaster.forecast_all_series(
@@ -69,58 +72,61 @@ def main():
             model=model
         )
         
-        # Initialize matrix reconciliation
-        reconciler = MatrixReconciliation(hierarchy, method='bottom_up')
+        # Initialize reconcilers
+        bottom_up_reconciler = MatrixReconciliation(hierarchy, method='bottom_up')
+        top_down_reconciler = MatrixReconciliation(hierarchy, method='top_down')
         
-        # Create summing matrix
-        S = reconciler.create_summing_matrix()
+        # Create base forecasts array
+        base_forecasts_array = np.array([base_forecasts[name] for name in bottom_series])
         
-        # Create reconciliation matrix
-        G = reconciler.create_reconciliation_matrix()
+        # Create actual values array
+        actual_values = np.array(val_series)
         
-        # Reconcile forecasts
-        reconciled_forecasts = reconciler.reconcile_forecasts(
-            np.array([base_forecasts[name] for name in bottom_series])
-        )
+        # Get reconciled forecasts
+        bottom_up_forecasts = bottom_up_reconciler.reconcile_forecasts(base_forecasts_array)
+        top_down_forecasts = top_down_reconciler.reconcile_forecasts(base_forecasts_array)
         
-        # Convert reconciled forecasts to dictionary format
-        reconciled_dict = {
-            name: reconciled_forecasts[i] 
-            for i, name in enumerate(bottom_series)
-        }
-        
-        # Evaluate reconciliation
-        metrics = reconciler.evaluate_reconciliation(
-            np.array([base_forecasts[name] for name in bottom_series]),
-            val_series
-        )
-        
-        # Store metrics
-        all_metrics[model_name] = {
-            'EBIT': {
-                'mae': metrics['mae'],
-                'rmse': metrics['rmse'],
-                'mape': metrics['mape']
+        # Calculate metrics for each version
+        metrics_data = {
+            'Base': {
+                'Model': model_name,
+                'Method': 'Base',
+                'MAE': np.mean(np.abs(actual_values[0] - base_forecasts_array[0])),
+                'RMSE': np.sqrt(np.mean((actual_values[0] - base_forecasts_array[0]) ** 2)),
+                'MAPE': np.mean(np.abs((actual_values[0] - base_forecasts_array[0]) / actual_values[0])) * 100
+            },
+            'Bottom-Up': {
+                'Model': model_name,
+                'Method': 'Bottom-Up',
+                'MAE': np.mean(np.abs(actual_values[0] - bottom_up_forecasts[0])),
+                'RMSE': np.sqrt(np.mean((actual_values[0] - bottom_up_forecasts[0]) ** 2)),
+                'MAPE': np.mean(np.abs((actual_values[0] - bottom_up_forecasts[0]) / actual_values[0])) * 100
+            },
+            'Top-Down': {
+                'Model': model_name,
+                'Method': 'Top-Down',
+                'MAE': np.mean(np.abs(actual_values[0] - top_down_forecasts[0])),
+                'RMSE': np.sqrt(np.mean((actual_values[0] - top_down_forecasts[0]) ** 2)),
+                'MAPE': np.mean(np.abs((actual_values[0] - top_down_forecasts[0]) / actual_values[0])) * 100
             }
         }
         
-        # Plot results
-        Visualization.plot_hierarchical_forecasts(
-            {name: val_series[i] for i, name in enumerate(bottom_series)},
-            {name: reconciled_forecasts[i] for i, name in enumerate(bottom_series)},
-            f"{model_name} Forecasts"
-        )
-    
-    # Export results
-    print("\nExporting results...")
-    export_reconciliation_results(
-        base_forecasts=base_forecasts,
-        reconciled_forecasts=reconciled_dict,
-        actual_values={name: val_series[i] for i, name in enumerate(bottom_series)},
-        dates=val['Date'],
-        metrics=all_metrics,
-        output_dir=OUTPUT_DIR
-    )
+        # Convert metrics to DataFrame and save
+        metrics_df = pd.DataFrame.from_dict(metrics_data, orient='index')
+        metrics_df.reset_index(inplace=True)
+        metrics_df.rename(columns={'index': 'Type'}, inplace=True)
+        metrics_df = metrics_df[['Model', 'Method', 'MAE', 'RMSE', 'MAPE']]
+        
+        # Save metrics to the main output directory
+        main_metrics_path = os.path.join('output', 'all_models_metrics.xlsx')
+        if os.path.exists(main_metrics_path):
+            with pd.ExcelWriter(main_metrics_path, mode='a', if_sheet_exists='overlay') as writer:
+                metrics_df.to_excel(writer, sheet_name='Metrics', startrow=writer.sheets['Metrics'].max_row, index=False, header=False)
+        else:
+            with pd.ExcelWriter(main_metrics_path) as writer:
+                metrics_df.to_excel(writer, sheet_name='Metrics', index=False)
+        
+        print(f"Completed processing {model_name}")
     
     print("\nAnalysis complete! Results saved to the output directory.")
 
