@@ -69,43 +69,31 @@ class MatrixReconciliation:
         self.S = S_block
         return S_block
     
-    def create_reconciliation_matrix(self, method: Optional[str] = None) -> np.ndarray:
+    def create_reconciliation_matrix(self) -> None:
         """
         Create the reconciliation matrix G based on the chosen method.
-        
-        Args:
-            method (str, optional): Override the default method for this call
-            
-        Returns:
-            np.ndarray: The reconciliation matrix G
+        For bottom-up: G is a zero matrix with identity in the bottom-right corner
+        For top-down: G is a zero matrix with proportions in the appropriate positions
         """
-        if method is None:
-            method = self.method
-            
-        if self.S is None:
-            self.create_summing_matrix()
-            
+        # Get dimensions
+        n_total = self.S.shape[0]  # Total number of nodes
         n_bottom = self.S.shape[1]  # Number of bottom level nodes
-        n_total = self.S.shape[0]   # Total number of nodes
-            
-        if method == 'bottom_up':
-            # For bottom-up, G is a zero matrix with identity in the bottom-right corner
-            G = np.zeros((n_bottom, n_total))
-            G[:, -n_bottom:] = np.eye(n_bottom)
-            
-        elif method == 'top_down':
-            # For top-down, we need historical proportions
-            G = np.zeros((n_bottom, n_total))
-            
-        elif method == 'mint':
-            # For MinT, we need covariance information
-            G = np.zeros((n_bottom, n_total))
-            
+        
+        # Initialize G matrix
+        self.G = np.zeros((n_total, n_bottom))
+        
+        if self.method == 'bottom_up':
+            # For bottom-up: G is zero matrix with identity in bottom-right corner
+            self.G[-n_bottom:, -n_bottom:] = np.eye(n_bottom)
+        elif self.method == 'top_down':
+            # For top-down: G is zero matrix with proportions
+            # The proportions should be based on historical data
+            # For now, we'll use equal proportions as a placeholder
+            # TODO: Replace with actual historical proportions
+            proportions = np.ones(n_bottom) / n_bottom
+            self.G[0, :] = proportions  # Top level gets all proportions
         else:
-            raise ValueError(f"Unknown reconciliation method: {method}")
-            
-        self.G = G
-        return G
+            raise ValueError(f"Unknown reconciliation method: {self.method}")
     
     def reconcile_forecasts(self, base_forecasts: np.ndarray) -> np.ndarray:
         """
@@ -120,6 +108,9 @@ class MatrixReconciliation:
         if self.S is None:
             self.create_summing_matrix()
             
+        if self.G is None:
+            self.create_reconciliation_matrix()
+            
         # Ensure base_forecasts has the right shape
         if base_forecasts.ndim == 1:
             base_forecasts = base_forecasts.reshape(-1, 1)
@@ -131,74 +122,118 @@ class MatrixReconciliation:
         if base_forecasts.shape[0] != n_bottom:
             raise ValueError(f"Base forecasts must have {n_bottom} rows (bottom level nodes), got {base_forecasts.shape[0]}")
             
-        # Apply reconciliation: y_hat = S * y_base
-        reconciled = self.S @ base_forecasts
+        # Apply reconciliation based on method
+        if self.method == 'bottom_up':
+            # For bottom-up: y_hat = S * y_base
+            reconciled = self.S @ base_forecasts
+        elif self.method == 'top_down':
+            # For top-down: y_hat = G * y_base
+            reconciled = self.G @ base_forecasts
+        else:
+            raise ValueError(f"Unknown reconciliation method: {self.method}")
         
         return reconciled
     
-    def evaluate_reconciliation(self, 
-                              base_forecasts: np.ndarray, 
-                              actual_values: np.ndarray,
-                              model_name: str = 'default',
-                              metrics: List[str] = ['mae', 'rmse', 'mape']) -> Dict[str, float]:
+    def evaluate_reconciliation(self, base_forecasts, actual_values, model_name):
         """
-        Evaluate the reconciliation performance using specified metrics.
-        Saves all forecasts but only evaluates metrics for EBIT.
+        Evaluate reconciliation performance and save results.
         
         Args:
-            base_forecasts (np.ndarray): Base forecasts
-            actual_values (np.ndarray): Actual values
-            model_name (str): Name of the model/predictor
-            metrics (List[str]): List of metrics to compute
+            base_forecasts: Base forecasts array
+            actual_values: Actual values array
+            model_name: Name of the model being evaluated
             
         Returns:
-            Dict[str, float]: Dictionary of metric values for EBIT only
+            Dictionary containing metrics for EBIT
         """
-        reconciled = self.reconcile_forecasts(base_forecasts)
+        print(f"Starting evaluation for {model_name}...")
+        print(f"Base forecasts shape: {base_forecasts.shape}")
+        print(f"Actual values shape: {actual_values.shape}")
         
-        # Extract only EBIT forecasts (first row of reconciled forecasts)
-        reconciled_ebit = reconciled[0]  # First row is EBIT
-        actual_ebit = actual_values[0]   # First row is EBIT
+        # Create separate reconcilers for bottom-up and top-down
+        bottom_up_reconciler = MatrixReconciliation(self.hierarchy, method='bottom_up')
+        top_down_reconciler = MatrixReconciliation(self.hierarchy, method='top_down')
         
-        # Calculate metrics only for EBIT
-        results = {}
-        for metric in metrics:
-            if metric == 'mae':
-                results['mae'] = np.mean(np.abs(reconciled_ebit - actual_ebit))
-            elif metric == 'rmse':
-                results['rmse'] = np.sqrt(np.mean((reconciled_ebit - actual_ebit)**2))
-            elif metric == 'mape':
-                results['mape'] = np.mean(np.abs((reconciled_ebit - actual_ebit) / actual_ebit)) * 100
-                
-        # Save all forecasts and metrics to Excel file
-        output_dir = os.path.join('output', model_name)
+        # Get reconciled forecasts
+        print("Getting bottom-up reconciled forecasts...")
+        bottom_up_forecasts = bottom_up_reconciler.reconcile_forecasts(base_forecasts)
+        print(f"Bottom-up forecasts shape: {bottom_up_forecasts.shape}")
+        
+        print("Getting top-down reconciled forecasts...")
+        top_down_forecasts = top_down_reconciler.reconcile_forecasts(base_forecasts)
+        print(f"Top-down forecasts shape: {top_down_forecasts.shape}")
+        
+        # Calculate metrics for EBIT (first series)
+        print("Calculating metrics for EBIT...")
+        results = {
+            'mae_bu': np.mean(np.abs(actual_values[0] - bottom_up_forecasts[0])),
+            'mae_td': np.mean(np.abs(actual_values[0] - top_down_forecasts[0])),
+            'rmse_bu': np.sqrt(np.mean((actual_values[0] - bottom_up_forecasts[0]) ** 2)),
+            'rmse_td': np.sqrt(np.mean((actual_values[0] - top_down_forecasts[0]) ** 2)),
+            'mape_bu': np.mean(np.abs((actual_values[0] - bottom_up_forecasts[0]) / actual_values[0])) * 100,
+            'mape_td': np.mean(np.abs((actual_values[0] - top_down_forecasts[0]) / actual_values[0])) * 100
+        }
+        
+        # Create output directory
+        output_dir = f"output/{model_name}"
+        print(f"Creating output directory: {output_dir}")
         os.makedirs(output_dir, exist_ok=True)
         
-        # Create Excel file with multiple sheets
-        excel_path = os.path.join(output_dir, 'forecasts.xlsx')
-        with pd.ExcelWriter(excel_path) as writer:
-            # Save all base forecasts
-            pd.DataFrame(base_forecasts).to_excel(writer, sheet_name='Base_Forecasts', index=False)
+        # Define series names based on the actual number of series
+        series_names = ['EBIT', 'ContributionMargin1', 'EBITDA', 'NetSales', '-VariableCosts', '-FixCosts', '-DepreciationAmortization']
+        
+        # Save all forecasts and metrics to Excel
+        print("Saving forecasts and metrics to Excel...")
+        with pd.ExcelWriter(f"{output_dir}/forecasts.xlsx") as writer:
+            # Save base forecasts (using only the available series)
+            pd.DataFrame(base_forecasts.T, columns=series_names[:base_forecasts.shape[0]]).to_excel(
+                writer, sheet_name='Base_Forecasts', index=False
+            )
             
-            # Save all reconciled forecasts
-            pd.DataFrame(reconciled).to_excel(writer, sheet_name='Reconciled_Forecasts', index=False)
+            # Save bottom-up reconciled forecasts
+            pd.DataFrame(bottom_up_forecasts.T, columns=series_names[:bottom_up_forecasts.shape[0]]).to_excel(
+                writer, sheet_name='BottomUp_Forecasts', index=False
+            )
             
-            # Save all actual values
-            pd.DataFrame(actual_values).to_excel(writer, sheet_name='Actual_Values', index=False)
+            # Save top-down reconciled forecasts
+            pd.DataFrame(top_down_forecasts.T, columns=series_names[:top_down_forecasts.shape[0]]).to_excel(
+                writer, sheet_name='TopDown_Forecasts', index=False
+            )
             
-            # Add EBIT metrics to a separate sheet
-            metrics_df = pd.DataFrame([results])
+            # Save actual values
+            pd.DataFrame(actual_values.T, columns=series_names[:actual_values.shape[0]]).to_excel(
+                writer, sheet_name='Actual_Values', index=False
+            )
+            
+            # Save metrics
+            metrics_df = pd.DataFrame({
+                'Metric': ['MAE', 'RMSE', 'MAPE'],
+                'Bottom-Up': [results['mae_bu'], results['rmse_bu'], results['mape_bu']],
+                'Top-Down': [results['mae_td'], results['rmse_td'], results['mape_td']]
+            })
             metrics_df.to_excel(writer, sheet_name='EBIT_Metrics', index=False)
         
+        # Plot all forecasts
+        print("Generating forecast plot...")
+        self.plot_reconciliation(
+            base_forecasts,
+            bottom_up_forecasts,
+            top_down_forecasts,
+            actual_values,
+            model_name
+        )
+        
+        print(f"Completed evaluation for {model_name}")
         return results
     
-    def plot_reconciliation(self, base_forecasts, reconciled_forecasts, actual_values, model_name):
+    def plot_reconciliation(self, base_forecasts, bottom_up_forecasts, top_down_forecasts, actual_values, model_name):
         """
-        Plot the base forecasts, reconciled forecasts, and actual values.
+        Plot the base forecasts, bottom-up reconciled forecasts, top-down reconciled forecasts, and actual values.
         
         Args:
             base_forecasts: Base forecasts for all series
-            reconciled_forecasts: Reconciled forecasts
+            bottom_up_forecasts: Bottom-up reconciled forecasts
+            top_down_forecasts: Top-down reconciled forecasts
             actual_values: Actual values (can be list or numpy array)
             model_name: Name of the model for output directory
         """
@@ -211,8 +246,10 @@ class MatrixReconciliation:
             actual_values = np.array(actual_values)
         if isinstance(base_forecasts, list):
             base_forecasts = np.array(base_forecasts)
-        if isinstance(reconciled_forecasts, list):
-            reconciled_forecasts = np.array(reconciled_forecasts)
+        if isinstance(bottom_up_forecasts, list):
+            bottom_up_forecasts = np.array(bottom_up_forecasts)
+        if isinstance(top_down_forecasts, list):
+            top_down_forecasts = np.array(top_down_forecasts)
         
         # Get the number of series from the actual values shape
         n_series = actual_values.shape[0]
@@ -230,8 +267,11 @@ class MatrixReconciliation:
             # Plot base forecasts
             ax.plot(base_forecasts[i], label='Base Forecast', color='blue', linestyle='--')
             
-            # Plot reconciled forecasts using the specified method
-            ax.plot(reconciled_forecasts[i], label=f'Reconciled ({self.method})', color='green', linestyle='-')
+            # Plot bottom-up reconciled forecasts
+            ax.plot(bottom_up_forecasts[i], label='Bottom-Up Reconciled', color='green', linestyle='-')
+            
+            # Plot top-down reconciled forecasts
+            ax.plot(top_down_forecasts[i], label='Top-Down Reconciled', color='purple', linestyle='-.')
             
             # Plot actual values
             ax.plot(actual_values[i], label='Actual', color='red')
@@ -255,15 +295,19 @@ class MatrixReconciliation:
             base_df = pd.DataFrame(base_forecasts.T, columns=series_names[:base_forecasts.shape[0]])
             base_df.to_excel(writer, sheet_name='Base_Forecasts', index=False)
             
-            # Save reconciled forecasts
-            reconciled_df = pd.DataFrame(reconciled_forecasts.T, columns=series_names[:reconciled_forecasts.shape[0]])
-            reconciled_df.to_excel(writer, sheet_name='Reconciled_Forecasts', index=False)
+            # Save bottom-up reconciled forecasts
+            bottom_up_df = pd.DataFrame(bottom_up_forecasts.T, columns=series_names[:bottom_up_forecasts.shape[0]])
+            bottom_up_df.to_excel(writer, sheet_name='BottomUp_Forecasts', index=False)
+            
+            # Save top-down reconciled forecasts
+            top_down_df = pd.DataFrame(top_down_forecasts.T, columns=series_names[:top_down_forecasts.shape[0]])
+            top_down_df.to_excel(writer, sheet_name='TopDown_Forecasts', index=False)
             
             # Save actual values
             actual_df = pd.DataFrame(actual_values.T, columns=series_names[:actual_values.shape[0]])
             actual_df.to_excel(writer, sheet_name='Actual_Values', index=False)
             
-            # Calculate metrics only for EBIT
+            # Calculate metrics for EBIT
             metrics_data = {
                 'Base': {
                     'Model': model_name,
@@ -272,12 +316,19 @@ class MatrixReconciliation:
                     'RMSE': np.sqrt(np.mean((actual_values[0] - base_forecasts[0]) ** 2)),
                     'MAPE': np.mean(np.abs((actual_values[0] - base_forecasts[0]) / actual_values[0])) * 100
                 },
-                'Reconciled': {
+                'Bottom-Up': {
                     'Model': model_name,
-                    'Method': self.method,
-                    'MAE': np.mean(np.abs(actual_values[0] - reconciled_forecasts[0])),
-                    'RMSE': np.sqrt(np.mean((actual_values[0] - reconciled_forecasts[0]) ** 2)),
-                    'MAPE': np.mean(np.abs((actual_values[0] - reconciled_forecasts[0]) / actual_values[0])) * 100
+                    'Method': 'Bottom-Up',
+                    'MAE': np.mean(np.abs(actual_values[0] - bottom_up_forecasts[0])),
+                    'RMSE': np.sqrt(np.mean((actual_values[0] - bottom_up_forecasts[0]) ** 2)),
+                    'MAPE': np.mean(np.abs((actual_values[0] - bottom_up_forecasts[0]) / actual_values[0])) * 100
+                },
+                'Top-Down': {
+                    'Model': model_name,
+                    'Method': 'Top-Down',
+                    'MAE': np.mean(np.abs(actual_values[0] - top_down_forecasts[0])),
+                    'RMSE': np.sqrt(np.mean((actual_values[0] - top_down_forecasts[0]) ** 2)),
+                    'MAPE': np.mean(np.abs((actual_values[0] - top_down_forecasts[0]) / actual_values[0])) * 100
                 }
             }
             

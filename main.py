@@ -126,6 +126,17 @@ def main():
             with pd.ExcelWriter(main_metrics_path) as writer:
                 metrics_df.to_excel(writer, sheet_name='Metrics', index=False)
         
+        # Create model-specific output directory
+        model_output_dir = os.path.join(OUTPUT_DIR, model_name)
+        os.makedirs(model_output_dir, exist_ok=True)
+        
+        # Save forecasts and plots
+        bottom_up_reconciler.evaluate_reconciliation(
+            base_forecasts_array,
+            actual_values,
+            model_name
+        )
+        
         print(f"Completed processing {model_name}")
     
     print("\nAnalysis complete! Results saved to the output directory.")
