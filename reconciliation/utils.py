@@ -2,6 +2,8 @@ import numpy as np
 from typing import Dict, List, Union
 import pandas as pd
 import os
+import matplotlib.pyplot as plt
+
 
 def calculate_metrics(y_true: np.ndarray,
                      y_pred: np.ndarray,

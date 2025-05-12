@@ -3,8 +3,12 @@ from reconciliation import (
     MatrixReconciliation,
     ForecastingModels,
     Visualization,
+    ModelEvaluator,
     calculate_metrics,
     export_reconciliation_results
+)
+from darts.dataprocessing.transformers import (
+    MinTReconciliator, BottomUpReconciliator, TopDownReconciliator
 )
 import numpy as np
 import pandas as pd
@@ -21,9 +25,6 @@ def main():
     DATA_PATH = 'data/SampleHierForecastingBASF_share.xlsx'
     OUTPUT_DIR = 'output'
     FORECAST_HORIZONS = [1, 3, 6, 12]
-    
-    # Define reconciliation methods to test (only Bottom-Up and Top-Down)
-    RECONCILIATION_METHODS = ['bottom_up', 'top_down']
     
     # Initialize data loader
     print("Loading and preprocessing data...")
@@ -45,6 +46,15 @@ def main():
     train_series = data_loader.prepare_time_series(train, bottom_series)
     val_series = data_loader.prepare_time_series(val, bottom_series)
     
+    # Define reconciliation methods to test (only Bottom-Up and Top-Down)
+    RECONCILIATION_METHODS = [
+        ('matrix_bottom_up',MatrixReconciliation(hierarchy, method='bottom_up')), 
+        ('matrix_top_down',MatrixReconciliation(hierarchy, method='top_down')),
+    #    ('darts_bottom_up',BottomUpReconciliator()), 
+      #  ('darts_top_down',TopDownReconciliator()),
+       # ('darts_MiNT',MinTReconciliator(method="ols")),
+        ]
+
     # Initialize forecasting models
     print("\nInitializing forecasting models...")
     models = [
@@ -71,74 +81,56 @@ def main():
             n_periods=len(val),
             model=model
         )
-        
-        # Initialize reconcilers
-        bottom_up_reconciler = MatrixReconciliation(hierarchy, method='bottom_up')
-        top_down_reconciler = MatrixReconciliation(hierarchy, method='top_down')
-        
-        # Create base forecasts array
         base_forecasts_array = np.array([base_forecasts[name] for name in bottom_series])
-        
-        # Create actual values array
         actual_values = np.array(val_series)
         
         # Get reconciled forecasts
-        bottom_up_forecasts = bottom_up_reconciler.reconcile_forecasts(base_forecasts_array)
-        top_down_forecasts = top_down_reconciler.reconcile_forecasts(base_forecasts_array)
-        
-        # Calculate metrics for each version
-        metrics_data = {
-            'Base': {
-                'Model': model_name,
-                'Method': 'Base',
-                'MAE': np.mean(np.abs(actual_values[0] - base_forecasts_array[0])),
-                'RMSE': np.sqrt(np.mean((actual_values[0] - base_forecasts_array[0]) ** 2)),
-                'MAPE': np.mean(np.abs((actual_values[0] - base_forecasts_array[0]) / actual_values[0])) * 100
-            },
-            'Bottom-Up': {
-                'Model': model_name,
-                'Method': 'Bottom-Up',
-                'MAE': np.mean(np.abs(actual_values[0] - bottom_up_forecasts[0])),
-                'RMSE': np.sqrt(np.mean((actual_values[0] - bottom_up_forecasts[0]) ** 2)),
-                'MAPE': np.mean(np.abs((actual_values[0] - bottom_up_forecasts[0]) / actual_values[0])) * 100
-            },
-            'Top-Down': {
-                'Model': model_name,
-                'Method': 'Top-Down',
-                'MAE': np.mean(np.abs(actual_values[0] - top_down_forecasts[0])),
-                'RMSE': np.sqrt(np.mean((actual_values[0] - top_down_forecasts[0]) ** 2)),
-                'MAPE': np.mean(np.abs((actual_values[0] - top_down_forecasts[0]) / actual_values[0])) * 100
-            }
-        }
-        
-        # Convert metrics to DataFrame and save
-        metrics_df = pd.DataFrame.from_dict(metrics_data, orient='index')
-        metrics_df.reset_index(inplace=True)
-        metrics_df.rename(columns={'index': 'Type'}, inplace=True)
-        metrics_df = metrics_df[['Model', 'Method', 'MAE', 'RMSE', 'MAPE']]
-        
-        # Save metrics to the main output directory
-        main_metrics_path = os.path.join('output', 'all_models_metrics.xlsx')
-        if os.path.exists(main_metrics_path):
-            with pd.ExcelWriter(main_metrics_path, mode='a', if_sheet_exists='overlay') as writer:
-                metrics_df.to_excel(writer, sheet_name='Metrics', startrow=writer.sheets['Metrics'].max_row, index=False, header=False)
-        else:
-            with pd.ExcelWriter(main_metrics_path) as writer:
-                metrics_df.to_excel(writer, sheet_name='Metrics', index=False)
-        
-        # Create model-specific output directory
-        model_output_dir = os.path.join(OUTPUT_DIR, model_name)
-        os.makedirs(model_output_dir, exist_ok=True)
-        
-        # Save forecasts and plots
-        bottom_up_reconciler.evaluate_reconciliation(
-            base_forecasts_array,
-            actual_values,
-            model_name
-        )
-        
-        print(f"Completed processing {model_name}")
+        reconciliated_forecasts_array = []
+        for method in RECONCILIATION_METHODS:
+                reconciliated_forecasts_array.append((method[0], method[1].transform(base_forecasts_array)))
+        print("Evaluating...")
+    metrics_data = {
+                'Base': {
+                    'Model': model_name,
+                    'Method': 'Base',
+                    'MAE': np.mean(np.abs(actual_values[0] - base_forecasts_array[0])),
+                    'RMSE': np.sqrt(np.mean((actual_values[0] - base_forecasts_array[0]) ** 2)),
+                    'MAPE': np.mean(np.abs((actual_values[0] - base_forecasts_array[0]) / actual_values[0])) * 100
+                }
+            }   
     
+    for method in reconciliated_forecasts_array:
+         temp= method[1]
+         metrics_data[method[0]]={
+                    'Model': model_name,
+                    'Method': method[0],
+                    'MAE': np.mean(np.abs(actual_values[0] - temp[0])),
+                    'RMSE': np.sqrt(np.mean((actual_values[0] - temp[0]) ** 2)),
+                    'MAPE': np.mean(np.abs((actual_values[0] - temp[0]) / actual_values[0])) * 100
+                }
+    
+    metrics_df = pd.DataFrame.from_dict(metrics_data, orient='index')
+    metrics_df.reset_index(inplace=True)
+    metrics_df.rename(columns={'index': 'Type'}, inplace=True)
+    metrics_df = metrics_df[['Model', 'Method', 'MAE', 'RMSE', 'MAPE']]
+
+    main_metrics_path = os.path.join('output', 'all_models_metrics.xlsx')
+    if os.path.exists(main_metrics_path):
+        with pd.ExcelWriter(main_metrics_path, mode='a', if_sheet_exists='overlay') as writer:
+            metrics_df.to_excel(writer, sheet_name='Metrics', startrow=writer.sheets['Metrics'].max_row, index=False, header=False)
+    else:
+        with pd.ExcelWriter(main_metrics_path) as writer:
+            metrics_df.to_excel(writer, sheet_name='Metrics', index=False)
+        
+    model_output_dir = os.path.join(OUTPUT_DIR, model_name)
+    os.makedirs(model_output_dir, exist_ok=True)
+        
+    bottom_up_reconciler.evaluate_reconciliation(
+        base_forecasts_array,
+        actual_values,
+        model_name)
+
+        
     print("\nAnalysis complete! Results saved to the output directory.")
 
 if __name__ == "__main__":
