@@ -1,0 +1,15 @@
+MAE for  Model Ensemble, MiNT: 9909.87
+MAPE for  Model Ensemble, MiNT: 162.36
+RMSE for  Model Ensemble, MiNT: 11806.17
+
+MAE for  Model Ensemble, Darts Top Down: 10709.90
+MAPE for  Model Ensemble, Darts Top Down: 157.23
+RMSE for  Model Ensemble, Darts Top Down: 12366.01
+
+MAE for Model Ensemble, Darts Bottom Up: 17603.48
+MAPE for Model Ensemble, Darts Bottom Up: 301.98
+RMSE for Model Ensemble, Darts Bottom Up: 19483.53
+
+MAE for  Model Ensemble: 10787.90
+MAPE for  Model Ensemble: 231.92
+RMSE for  Model Ensemble: 12880.89

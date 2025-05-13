@@ -1,0 +1,20 @@
+MAE for AutoARIMA: 25446.38
+RMSE for AutoARIMA: 33341.89
+
+MAE for ExponentialSmoothing: 9987.80
+RMSE for ExponentialSmoothing: 11312.62
+
+MAE for Prophet: 12980.65
+RMSE for Prophet: 16242.64
+
+MAE for FFT: 10343.41
+RMSE for FFT: 14287.85
+
+MAE for NBEATSModel: 19686.86
+RMSE for NBEATSModel: 22192.27
+
+MAE for LinearRegression: 10900.66
+RMSE for LinearRegression: 13185.51
+
+MAE for XGBRegressor: 9017.24
+RMSE for XGBRegressor: 10968.69
