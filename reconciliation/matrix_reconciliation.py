@@ -95,7 +95,7 @@ class MatrixReconciliation:
         else:
             raise ValueError(f"Unknown reconciliation method: {self.method}")
     
-    def reconcile_forecasts(self, base_forecasts: np.ndarray) -> np.ndarray:
+    def transform(self, base_forecasts) -> np.ndarray:
         """
         Reconcile base forecasts using the chosen method.
         
@@ -110,7 +110,10 @@ class MatrixReconciliation:
             
         if self.G is None:
             self.create_reconciliation_matrix()
-            
+        
+        if type(base_forecasts) != np.ndarray:
+            base_forecasts = np.array(base_forecasts)
+
         # Ensure base_forecasts has the right shape
         if base_forecasts.ndim == 1:
             base_forecasts = base_forecasts.reshape(-1, 1)
