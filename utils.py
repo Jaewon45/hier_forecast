@@ -6,6 +6,33 @@ import matplotlib as plt
 import re
 
 
+def coherency(s, name="Unknown"):
+    """check if a timeseries object is coherent according to a hierarchy. if not, print how far off it is as a percent of total value of top level
+    
+    Args: 
+        s: TimeSeries returned as a result of model prediction/comparison functions. must have a hierarchy
+    Returns:
+        int: the percent difference between the top level and the sum of bottom levels
+
+    
+    """
+    if s.has_hierarchy:
+        h = get_levels(s)
+        parent_total = 0
+        child_total = 0
+        for level in h.keys():
+            parent_total += sum(s[level].values())[0]
+            child_total += sum(sum(s[h[level]].values()))
+        diff = (parent_total-child_total) 
+        if abs(diff) > 1:
+            print(f"Model Name: {name}")
+            print(f"{diff * 100 / parent_total:.2f}% off")  
+        return diff * 100 / parent_total
+    
+    else:
+        print("Series has no hierarchy")
+    print()
+
 def score_function(row):
     """custom score function weighting different priorities, test feature"""
     return (row['yearly_sMAPE'] +
@@ -266,7 +293,7 @@ def compare_models_univariate(data, val, models, past_cov=None):
   get_metrics_batched(predictions, val)
   return fittedmodels, predictions
 
-def compare_models_reconciliated(data, val, models, reconciliators, reconciliator_names):
+def compare_models_reconciliated(data, val, models, reconciliators):
   """
     Evaluate multiple multivariate forecasting models using different reconciliations methods. compare based on performance with EBIT.
 
@@ -283,8 +310,8 @@ def compare_models_reconciliated(data, val, models, reconciliators, reconciliato
   reconciled_predictions={}
   for k,v in models.items():
     print(f"Testing {k}")
-    for i in range(len(reconciliators)):
-      reconciled_predictions[k+", "+reconciliator_names[i]] = reconciliators[i].transform(v)
+    for r, name in reconciliators.items():
+       reconciled_predictions[k+", "+name] = r.transform(v)
   for_testing = {k:v['EBIT'] for k,v in reconciled_predictions.items()}
   get_metrics_batched(for_testing, val['EBIT'])
   return reconciled_predictions
@@ -309,23 +336,39 @@ def get_best_per_series(data, val, models, past_cov=None):
         >>> fitted, preds = compare_models_simple(train, val, covariates, models)
     """
   #check performance of passed models on data, return all fitted models in case of future evaluation needs
+  #select best model based on last 12 months!
   best = {}
+  
   for s in data.components:
+    window = len(val[s])
     predictions = {}
     rmse_scores = {}
     for m in models:
       model_name = re.match(r"^([A-Za-z0-9_]+)\(", str(m)).group(1)
+      #step 1: choose model using 
       if m.supports_past_covariates and past_cov:
-          m.fit(data[s], past_covariates=past_cov)
-          pred = m.predict(n=len(val[s]), past_covariates=past_cov)
+          m.fit(data[s][:-12], past_covariates=past_cov[:-12])
+          test = m.predict(n=window, past_covariates=past_cov)
       else:
-          m.fit(data[s])
-          pred = m.predict(n=len(val[s]))
+          m.fit(data[s][:-12])
+          test = m.predict(n=window)
+
+      rmse_scores[model_name]=rmse(test,data[s])   
+          
+      # step 2: generate predictions for 2022
+      if m.supports_past_covariates and past_cov:
+         m.fit(data[s], past_covariates=past_cov)
+         pred = m.predict(n=window, past_covariates=past_cov)
+      else:
+        m.fit(data[s])
+        pred = m.predict(n=window) 
+      
       predictions[model_name]=pred
-      rmse_scores[model_name]=rmse(pred,val[s])    
+
     best_for_series = min(rmse_scores.items(), key=lambda x: x[1])[0]
     print(f"{s}: {best_for_series}")
     best[s]=predictions[best_for_series]
+
   if len(best) == 1:
       return best[0]
   else:
